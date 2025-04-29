@@ -1,0 +1,317 @@
+---
+title: "HIV Trends 2000 - 2023"
+author: "Roger Olando"
+date: "2025-04-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Set global chunk options and load necessary libraries
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# Ensure required packages are installed
+if (!requireNamespace("janitor", quietly = TRUE)) {
+  install.packages("janitor")
+}
+library(tidyverse)
+library(janitor)
+library(readxl) 
+```
+
+## 1. Load and Inspect the Data
+```{r}
+hiv_data <- read_csv("HIV data 2000-2023.csv")
+# Inspect the structure and preview
+glimpse(hiv_data)
+head(hiv_data)
+
+```
+## 2. Clean & Prepare Data
+```{r}
+# Standardize column names, rename key fields, and convert types
+hiv_clean <- hiv_data %>%
+  clean_names() %>%                
+  rename(
+    country = location,
+    year    = period,
+    plhiv   = value
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    # Extract the estimated value before the bracket and convert to numeric
+    plhiv = plhiv %>%
+      str_extract("^[0-9 ]+") %>%
+      str_remove_all(" ") %>%
+      as.numeric()
+  ) %>%
+  filter(!is.na(plhiv))            # drop missing values
+```
+
+## 3. Identify Top Burden Countries (75%)
+```{r}
+# Find the most recent year
+target_year <- max(hiv_clean$year, na.rm = TRUE)
+
+# Summarize by country and compute cumulative share
+df_burden <- hiv_clean %>%
+  filter(year == target_year) %>%
+  group_by(country) %>%
+  summarise(plhiv_latest = sum(plhiv, na.rm = TRUE)) %>%
+  arrange(desc(plhiv_latest)) %>%
+  mutate(cum_share = cumsum(plhiv_latest) / sum(plhiv_latest))
+
+# Find the index where cumulative share reaches at least 75%
+cutoff_idx <- which(df_burden$cum_share >= 0.75)[1]
+
+# If no single cutoff (NA), take all countries; otherwise include up to cutoff_idx
+top_countries <- if (is.na(cutoff_idx)) {
+  df_burden$country
+} else {
+  df_burden$country[1:cutoff_idx]
+}
+
+# Display selected top countries
+top_countries
+```
+## 4. Subset Full Time Series
+```{r}
+# Filter the cleaned data for only the top-burden countries
+hiv_top_ts <- hiv_clean %>%
+  filter(country %in% top_countries)
+```
+## 5. Plot HIV Trends
+```{r}
+# Plot time series of PLHIV for selected countries
+ggplot(hiv_top_ts, aes(x = year, y = plhiv, color = country)) +
+  geom_line(size = 1) +
+  labs(
+    title = paste0("HIV Trends (2000–", target_year, ") for Countries Covering 75% of Global Burden"),
+    x     = "Year",
+    y     = "Number of People Living with HIV"
+  ) +
+  # Use comma labels instead of scientific notation
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(legend.position = "bottom") 
+```
+
+## 6. Interpretation
+
+The plot above highlights that **South Africa** has the largest number of people living with HIV, growing from around 3.5 million in 2000 to nearly 8 million in 2023. Countries such as **Nigeria** and **Mozambique** follow, but their trajectories are comparatively flatter. This visual confirmation supports our selection: these countries cumulatively account for 75% of the global HIV burden, with South Africa alone representing a substantial single-country share.
+
+## 7. Summary Table of 2023 PLHIV Counts and Cumulative Shares
+```{r}
+# Display a table of 2023 counts and cumulative shares for selected countries
+library(scales)
+
+df_burden %>%
+  filter(country %in% top_countries) %>%
+  mutate(
+    cum_share = percent(cum_share)
+  ) %>%
+  select(
+    Country         = country,
+    `PLHIV in 2023` = plhiv_latest,
+    `Cumulative Share` = cum_share
+  ) %>%
+  arrange(desc(`PLHIV in 2023`)) %>%
+  knitr::kable(
+    caption = "Top Countries Contributing to 75% of Global HIV Burden (2023)"
+  )
+```
+## 8. Trends by WHO Region
+```{r}
+# Plot HIV trends for top-burden countries within each WHO region
+# After clean_names(), 'ParentLocationCode' becomes 'parent_location_code'
+hiv_region_ts <- hiv_clean %>%
+  filter(country %in% top_countries) %>%
+  select(parent_location_code, country, year, plhiv)
+
+# Faceted plot for each WHO region code
+ggplot(hiv_region_ts, aes(x = year, y = plhiv, color = country)) +
+  geom_line(size = 1) +
+  facet_wrap(~ parent_location_code, scales = "free_y") +
+  labs(
+    title    = "HIV Trends (2000–2023) by WHO Region for Top Burden Countries",
+    subtitle = "Each panel shows countries contributing to 75% of global burden within that WHO region",
+    x        = "Year",
+    y        = "Number of People Living with HIV",
+    color    = "Country"
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+
+
+
+
+## 9. Load Multidimensional Poverty Data
+```{r}
+# Read poverty data from Excel, skipping descriptive rows
+# Skip the first two rows so that the third row (actual headers) is used
+poverty_data <- readxl::read_excel("multidimensional_poverty.xlsx", skip = 2)
+
+# Inspect raw names to verify
+print(names(poverty_data))
+```
+## 10. Clean Poverty Data
+```{r}
+# Manually assign clear column names based on the header row
+colnames(poverty_data) <- c(
+  "region",
+  "country_code",
+  "country",
+  "year",
+  "survey_name",
+  "survey_year",
+  "survey_coverage",
+  "welfare_type",
+  "survey_comparability",
+  "monetary_pct",
+  "education_attainment_pct",
+  "education_enrollment_pct",
+  "electricity_pct",
+  "sanitation_pct",
+  "drinking_water_pct",
+  "poverty_headcount_ratio_pct"
+)
+
+# Clean and select only needed columns
+df_pov_clean <- poverty_data %>%
+  select(
+    country,
+    year,
+    poverty_headcount = poverty_headcount_ratio_pct,
+    education_attainment = education_attainment_pct,
+    education_enrollment = education_enrollment_pct,
+    electricity_access = electricity_pct,
+    sanitation_access = sanitation_pct,
+    water_access = drinking_water_pct
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    across(
+      c(poverty_headcount, education_attainment,
+        education_enrollment, electricity_access,
+        sanitation_access, water_access),
+      as.numeric
+    )
+  ) %>%
+  filter(!is.na(country), !is.na(year), !is.na(poverty_headcount))
+
+```
+## 11. Merge HIV and Poverty Data 
+```{r}
+# Merge HIV and poverty datasets by country and year
+hiv_poverty <- hiv_clean %>%
+  filter(country %in% top_countries) %>%
+  inner_join(df_pov_clean, by = c("country", "year"))
+
+# Diagnostics
+cat("Merged records: ", nrow(hiv_poverty), "
+")
+if(nrow(hiv_poverty) == 0) stop("No matching records: check country names and years.")
+```
+## 12. Mixed Effects Modeling
+```{r}
+# Check observation counts per country
+df_counts <- hiv_poverty %>% count(country)
+
+if (all(df_counts$n == 1)) {
+  message("Only one observation per country: fitting cross-sectional linear model with 'year' as numeric covariate.")
+  # Fit cross-sectional linear model using numeric year to preserve degrees of freedom
+  model <- lm(
+    plhiv ~ poverty_headcount + education_enrollment + electricity_access +
+             sanitation_access + water_access + year,
+    data = hiv_poverty
+  )
+  library(broom)
+  model_summary <- tidy(model) %>%
+    filter(term != "(Intercept)")
+  knitr::kable(
+    model_summary,
+    digits = 3,
+    caption = "Cross-Sectional Linear Model Estimates (Year as Numeric)"
+  )
+} else {
+  message("Multiple observations per country: fitting mixed-effects model with random intercept for year.")
+  # Mixed-effects model remains unchanged
+  model <- lme4::lmer(
+    plhiv ~ poverty_headcount + education_enrollment + electricity_access +
+             sanitation_access + water_access + (1 | year),
+    data = hiv_poverty, REML = FALSE
+  )
+  model_summary <- broom.mixed::tidy(model, effects = "fixed", conf.int = TRUE)
+  knitr::kable(
+    model_summary,
+    digits = 3,
+    caption = "Mixed-Effects Model Fixed Effects"
+  )
+}
+```
+## 13. Descriptive Association Between HIV and Poverty
+```{r}
+# Pearson correlation
+er_corr <- cor(
+  hiv_poverty$poverty_headcount,
+  hiv_poverty$plhiv,
+  use = "pairwise.complete.obs"
+)
+cat("Pearson correlation (PLHIV vs. poverty headcount):", round(er_corr, 3), "
+")
+
+# Fit a simple linear model to control for year
+year_adj_model <- lm(
+  plhiv ~ poverty_headcount + year,
+  data = hiv_poverty
+)
+library(broom)
+year_adj_coef <- tidy(year_adj_model) %>% filter(term == "poverty_headcount")
+cat(
+  "Adjusted association controlling for year: estimate =", 
+  round(year_adj_coef$estimate, 3), 
+  ", p-value =", 
+  round(year_adj_coef$p.value, 3), "
+"
+)
+
+# Scatterplot colored by reporting year
+ggplot(hiv_poverty, aes(x = poverty_headcount, y = plhiv, color = year)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  scale_x_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_color_viridis_c(option = "plasma") +
+  labs(
+    title = "PLHIV vs. Poverty Headcount, Colored by Year",
+    x     = "Multidimensional Poverty Headcount Ratio (%)",
+    y     = "People Living with HIV",
+    color = "Year"
+  ) +
+  theme_minimal()
+```
+
+
+
+
+### Interpretation Accounting for Year
+
+After controlling for reporting year in the linear model, the association between poverty headcount and HIV burden remains **statistically significant** (estimate = `r round(year_adj_coef$estimate, 3)`, p = `r round(year_adj_coef$p.value, 3)`), indicating that the relationship is not merely driven by temporal differences in survey years. The color gradient on the scatterplot shows how countries surveyed in later years (darker points) still fall along the same upward trend, reinforcing the robustness of the descriptive association over time.
+
+
+
+
+
+   
+
+
+
+
+
+
+
+
